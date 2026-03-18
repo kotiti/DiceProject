@@ -49,6 +49,26 @@
   const PHASE_SNAP_END = 3.2;       // final flip & snap
   const ANIM_DONE = 3.3;
 
+  // ===================== GLTF D6 MODEL =====================
+  // Loaded once, cloned per die. Texture swapped per skin.
+  var gltfD6Cache = {};       // skinId → { geometry, materials }
+  var gltfD6Geometry = null;  // shared geometry from first load
+  var gltfD6Loaded = false;
+  var gltfD6Textures = {};    // skinId → { baseColor, normal, metallicRoughness }
+  var gltfD6Loading = null;   // promise
+
+  // Map skin ID to baseColor texture file
+  var D6_SKIN_TEXTURES = {
+    dice_00: "assets/textures/dice_00_baseColor.png",
+    dice_01: "assets/textures/dice_01_baseColor.png",
+    dice_02: "assets/textures/dice_02_baseColor.png",
+    dice_03: "assets/textures/dice_03_baseColor.png"
+  };
+  var D6_SHARED_TEXTURES = {
+    normal: "assets/textures/dice_01_normal.png",
+    metallicRoughness: "assets/textures/dice_01_metallicRoughness.png"
+  };
+
   // ===================== STATE =====================
   let scene, camera, renderer;
   let trayGroup;
@@ -56,7 +76,7 @@
   let isAnimating = false;
   let animStartTime = 0;
   let preResults = [];
-  let currentSkin = "classic";
+  let currentSkin = "dice_00";
   let sceneReady = false;
   let lastTimestamp = 0;
 
@@ -343,14 +363,89 @@
   }
 
   // ===================== DICE MESH CREATION =====================
-  function createDieMesh(dieType) {
-    const skin = SKINS[currentSkin];
-    const sides = DICE_FACES[dieType];
-    const color = skin.colors[sides];
+  // ===================== GLTF D6 LOADER =====================
+  function loadD6Model() {
+    if (gltfD6Loading) return gltfD6Loading;
+    gltfD6Loading = new Promise(function(resolve) {
+      var loader = new THREE.GLTFLoader();
+      loader.load("assets/scene.gltf", function(gltf) {
+        // Extract first mesh geometry (all 4 dice share same geometry)
+        gltf.scene.traverse(function(child) {
+          if (child.isMesh && !gltfD6Geometry) {
+            // Clone geometry and reset any transforms baked into the scene hierarchy
+            gltfD6Geometry = child.geometry.clone();
+            console.log("GLTF D6 geometry loaded:", gltfD6Geometry.attributes.position.count, "vertices");
+          }
+        });
 
+        // Load shared textures
+        var texLoader = new THREE.TextureLoader();
+        var normalTex = texLoader.load(D6_SHARED_TEXTURES.normal);
+        var mrTex = texLoader.load(D6_SHARED_TEXTURES.metallicRoughness);
+        normalTex.flipY = false;
+        mrTex.flipY = false;
+
+        // Load per-skin baseColor textures
+        var skinIds = Object.keys(D6_SKIN_TEXTURES);
+        for (var i = 0; i < skinIds.length; i++) {
+          var sid = skinIds[i];
+          var bcTex = texLoader.load(D6_SKIN_TEXTURES[sid]);
+          bcTex.flipY = false;
+          gltfD6Textures[sid] = {
+            baseColor: bcTex,
+            normal: normalTex,
+            metallicRoughness: mrTex
+          };
+        }
+
+        gltfD6Loaded = true;
+        resolve();
+      }, undefined, function(err) {
+        console.error("GLTF load error:", err);
+        resolve(); // continue without model
+      });
+    });
+    return gltfD6Loading;
+  }
+
+  function createD6FromGLTF(skinId) {
+    if (!gltfD6Geometry) return null;
+    var texSet = gltfD6Textures[skinId] || gltfD6Textures["dice_00"];
+
+    var mat = new THREE.MeshStandardMaterial({
+      map: texSet.baseColor,
+      normalMap: texSet.normal,
+      roughnessMap: texSet.metallicRoughness,
+      metalnessMap: texSet.metallicRoughness,
+      metalness: 0.0,
+      roughness: 1.0,
+      side: THREE.DoubleSide
+    });
+
+    var mesh = new THREE.Mesh(gltfD6Geometry.clone(), mat);
+    // Scale: the GLTF model is ~1 unit, scale to match our dice size
+    mesh.scale.set(0.7, 0.7, 0.7);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
+  function createDieMesh(dieType) {
+    // GLTF skins use "dice_XX" IDs; fallback to classic for non-D6 properties
+    const skin = SKINS[currentSkin] || SKINS.classic;
+    const sides = DICE_FACES[dieType];
+    const color = skin.colors[sides] || 0x3498db;
+
+    // D6: use GLTF model if loaded
+    if (dieType === "D6" && gltfD6Loaded) {
+      var gltfMesh = createD6FromGLTF(currentSkin);
+      if (gltfMesh) return gltfMesh;
+    }
+
+    // Fallback: original box-based D6
     if (dieType === "D6") {
       const geo = buildGeometry(6);
-      const order = [1, 6, 2, 5, 3, 4]; // +x -x +y -y +z -z
+      const order = [1, 6, 2, 5, 3, 4];
       const mats = order.map(v => {
         const tex = new THREE.CanvasTexture(createFaceTexture(v, color, skin.textColor));
         tex.minFilter = THREE.LinearFilter;
@@ -652,7 +747,10 @@
 
     // Update skin
     currentSkin = skinSelect.value;
-    faceQuatCache[dieType] = null; // reset since skin might need fresh geometry
+    faceQuatCache[dieType] = null;
+
+    // Ensure GLTF model is loaded before creating dice
+    var modelReady = gltfD6Loaded ? Promise.resolve() : loadD6Model();
 
     // Show modal
     modalTitle.textContent = count + dieType + " 굴리는 중...";
@@ -667,17 +765,19 @@
     // Load pre-baked path set for this dice count
     var pathSet = getPrebakedPathSet(count);
 
-    // Create dice with pre-baked paths
-    setTimeout(function() {
-      for (let i = 0; i < count; i++) {
-        var diePath = pathSet ? pathSet[i] : [[0,0]]; // fallback
-        const state = createDieState(dieType, preResults[i], i, count, diePath);
-        activeDice.push(state);
-        scene.add(state.mesh);
-      }
-      isAnimating = true;
-      animStartTime = performance.now() / 1000;
-    }, 350);
+    // Create dice after model loaded + modal animation
+    modelReady.then(function() {
+      setTimeout(function() {
+        for (let i = 0; i < count; i++) {
+          var diePath = pathSet ? pathSet[i] : [[0,0]];
+          const state = createDieState(dieType, preResults[i], i, count, diePath);
+          activeDice.push(state);
+          scene.add(state.mesh);
+        }
+        isAnimating = true;
+        animStartTime = performance.now() / 1000;
+      }, 350);
+    });
   }
 
   // ===================== ALIGN DICE FOR READABILITY =====================
@@ -826,15 +926,29 @@
   }
 
   // ===================== SKIN PREVIEW =====================
+  // Skin preview: show texture thumbnail for GLTF skins, color dots for legacy
   function updateSkinPreview() {
-    const skin = SKINS[skinSelect.value];
     skinPreview.innerHTML = "";
-    [4,6,8,12,20].forEach(function(s) {
-      const dot = document.createElement("div");
-      dot.className = "skin-dot";
-      dot.style.backgroundColor = "#" + skin.colors[s].toString(16).padStart(6,"0");
-      skinPreview.appendChild(dot);
-    });
+    var val = skinSelect.value;
+    if (D6_SKIN_TEXTURES[val]) {
+      // GLTF skin: show small thumbnail of the baseColor texture
+      var img = document.createElement("img");
+      img.src = D6_SKIN_TEXTURES[val];
+      img.style.width = "40px";
+      img.style.height = "40px";
+      img.style.borderRadius = "6px";
+      img.style.objectFit = "cover";
+      skinPreview.appendChild(img);
+    } else {
+      var skin = SKINS[val];
+      if (!skin) return;
+      [6,8,12,20].forEach(function(s) {
+        var dot = document.createElement("div");
+        dot.className = "skin-dot";
+        dot.style.backgroundColor = "#" + (skin.colors[s] || 0x888888).toString(16).padStart(6,"0");
+        skinPreview.appendChild(dot);
+      });
+    }
   }
 
   // ===================== RENDER LOOP =====================

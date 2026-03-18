@@ -1,2 +1,5 @@
 test-shots/
 node_modules/
+test-shots/
+test-results/
+package-lock.json

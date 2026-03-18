@@ -702,42 +702,46 @@
       return yCorr.multiply(faceQ);
     }
 
-    // Non-D6: try 4 Y rotations, pick the one where the top number plane
-    // text reads upright from camera view.
+    // Non-D6: compute EXACT Y correction from top child plane's text direction
     if (die.mesh.children.length > 0) {
       var screenUp = new THREE.Vector3(0, 0, -1);
       var savedQ = die.mesh.quaternion.clone();
-      var bestQ = faceQ, bestScore = -Infinity;
 
-      for (var i = 0; i < 4; i++) {
-        var yRot = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0), i * Math.PI / 2
-        );
-        var testQ = yRot.clone().multiply(faceQ);
-        die.mesh.quaternion.copy(testQ);
-        die.mesh.updateMatrixWorld(true);
+      // Apply face-up quaternion to measure child plane orientation
+      die.mesh.quaternion.copy(faceQ);
+      die.mesh.updateMatrixWorld(true);
 
-        // Find topmost child plane (the visible number)
-        var topPlane = null, topY = -Infinity;
-        for (var c = 0; c < die.mesh.children.length; c++) {
-          var wp = new THREE.Vector3();
-          die.mesh.children[c].getWorldPosition(wp);
-          if (wp.y > topY) { topY = wp.y; topPlane = die.mesh.children[c]; }
-        }
-        if (topPlane) {
-          var wq = new THREE.Quaternion();
-          topPlane.getWorldQuaternion(wq);
-          var textUp = new THREE.Vector3(0, 1, 0).applyQuaternion(wq);
-          textUp.y = 0;
-          if (textUp.length() > 0.001) {
-            textUp.normalize();
-            var score = textUp.dot(screenUp);
-            if (score > bestScore) { bestScore = score; bestQ = testQ.clone(); }
-          }
+      // Find topmost child plane (the visible number)
+      var topPlane = null, topY = -Infinity;
+      for (var c = 0; c < die.mesh.children.length; c++) {
+        var wp = new THREE.Vector3();
+        die.mesh.children[c].getWorldPosition(wp);
+        if (wp.y > topY) { topY = wp.y; topPlane = die.mesh.children[c]; }
+      }
+
+      if (topPlane) {
+        // Get the plane's text-up direction in world space
+        var wq = new THREE.Quaternion();
+        topPlane.getWorldQuaternion(wq);
+        var textUp = new THREE.Vector3(0, 1, 0).applyQuaternion(wq);
+        textUp.y = 0;
+
+        if (textUp.length() > 0.001) {
+          textUp.normalize();
+          // Compute exact angle between textUp and screenUp in XZ plane
+          var angle = Math.atan2(
+            textUp.x * screenUp.z - textUp.z * screenUp.x,
+            textUp.x * screenUp.x + textUp.z * screenUp.z
+          );
+          var yCorr = new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0), -angle
+          );
+          die.mesh.quaternion.copy(savedQ);
+          return yCorr.multiply(faceQ);
         }
       }
-      die.mesh.quaternion.copy(savedQ); // restore
-      return bestQ;
+
+      die.mesh.quaternion.copy(savedQ);
     }
 
     return faceQ;

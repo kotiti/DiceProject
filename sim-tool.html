@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>Dice Path Simulator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', sans-serif; background: #111; color: #ddd; padding: 20px; }
+    h1 { color: #c9a84c; margin-bottom: 10px; }
+    .layout { display: flex; gap: 20px; }
+    .panel { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 16px; }
+    .controls { width: 320px; display: flex; flex-direction: column; gap: 12px; }
+    .preview { flex: 1; }
+    label { font-size: 0.85rem; color: #888; display: block; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 8px; background: #222; border: 1px solid #444;
+      color: #ddd; border-radius: 4px; font-size: 0.9rem; }
+    button { padding: 10px 20px; background: #c9a84c; color: #111; border: none;
+      border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 0.95rem; }
+    button:hover { background: #e8d48b; }
+    button.secondary { background: #444; color: #ddd; }
+    button.secondary:hover { background: #666; }
+    canvas { background: #0a0a14; border-radius: 8px; display: block; }
+    .status { margin-top: 8px; font-size: 0.85rem; color: #888; min-height: 40px; }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    .info { font-size: 0.8rem; color: #666; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Dice Path Simulator Tool</h1>
+  <p style="color:#888; margin-bottom:16px;">경로를 시뮬레이션하고 저장합니다. 트레이 디자인 변경 시 여기서 재생성하세요.</p>
+
+  <div class="layout">
+    <div class="panel controls">
+      <div>
+        <label>Tray Radius</label>
+        <input type="number" id="trayRadius" value="5.5" step="0.1">
+      </div>
+      <div class="row">
+        <div><label>Wall Bounce</label><input type="number" id="wallBounce" value="0.65" step="0.05"></div>
+        <div><label>Min Bounces</label><input type="number" id="minBounces" value="1" step="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Friction Min</label><input type="number" id="frictionMin" value="0.988" step="0.001"></div>
+        <div><label>Friction Max</label><input type="number" id="frictionMax" value="0.996" step="0.001"></div>
+      </div>
+      <div class="row">
+        <div><label>Speed Min</label><input type="number" id="speedMin" value="6" step="1"></div>
+        <div><label>Speed Max</label><input type="number" id="speedMax" value="16" step="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Duration (s)</label><input type="number" id="duration" value="3.3" step="0.1"></div>
+        <div><label>FPS</label><input type="number" id="fps" value="20" step="5"></div>
+      </div>
+      <div class="row">
+        <div><label>Sets / Count</label><input type="number" id="setsPerCount" value="5" step="1"></div>
+        <div><label>Trials / Path</label><input type="number" id="trials" value="80" step="10"></div>
+      </div>
+      <div>
+        <label>Preview Count</label>
+        <select id="previewCount">
+          <option value="1">1</option><option value="2" selected>2</option>
+          <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+          <option value="6">6</option><option value="7">7</option><option value="8">8</option>
+          <option value="9">9</option><option value="10">10</option>
+        </select>
+      </div>
+      <button id="btnPreview">Preview 1 Set</button>
+      <button id="btnGenerate">Generate All (1-10)</button>
+      <button id="btnExport" class="secondary">Export paths.js</button>
+      <button id="btnImport" class="secondary">Import paths.js</button>
+      <input type="file" id="fileInput" accept=".js" style="display:none">
+      <div class="status" id="status">Ready</div>
+    </div>
+
+    <div class="panel preview">
+      <canvas id="canvas" width="600" height="600"></canvas>
+      <div class="info" id="info"></div>
+    </div>
+  </div>
+
+<script>
+(function() {
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+  const statusEl = document.getElementById("status");
+  const infoEl = document.getElementById("info");
+
+  let generatedData = null;
+  let previewPaths = null;
+  let animFrame = null;
+  let animStart = 0;
+
+  function getConfig() {
+    return {
+      trayRadius: parseFloat(document.getElementById("trayRadius").value),
+      wallBounce: parseFloat(document.getElementById("wallBounce").value),
+      frictionMin: parseFloat(document.getElementById("frictionMin").value),
+      frictionMax: parseFloat(document.getElementById("frictionMax").value),
+      speedMin: parseFloat(document.getElementById("speedMin").value),
+      speedMax: parseFloat(document.getElementById("speedMax").value),
+      duration: parseFloat(document.getElementById("duration").value),
+      fps: parseInt(document.getElementById("fps").value),
+      setsPerCount: parseInt(document.getElementById("setsPerCount").value),
+      trials: parseInt(document.getElementById("trials").value),
+      minBounces: parseInt(document.getElementById("minBounces").value),
+    };
+  }
+
+  function getGridPositions(count) {
+    if (count === 1) return [{ x: 0, z: 0 }];
+    if (count === 2) return [{ x: -1.1, z: 0 }, { x: 1.1, z: 0 }];
+    if (count === 3) return [{ x: -1.1, z: -0.6 }, { x: 1.1, z: -0.6 }, { x: 0, z: 0.8 }];
+    const cols = count <= 4 ? 2 : count <= 6 ? 3 : count <= 9 ? 3 : 5;
+    const rows = Math.ceil(count / cols);
+    const positions = [];
+    for (let i = 0; i < count; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      const colsInRow = (row === rows - 1) ? (count - row * cols) : cols;
+      positions.push({
+        x: (col - (colsInRow - 1) / 2) * 2.0,
+        z: (row - (rows - 1) / 2) * 2.0
+      });
+    }
+    return positions;
+  }
+
+  function simulatePath(startX, startZ, targetX, targetZ, cfg) {
+    const steps = Math.ceil(cfg.duration * cfg.fps);
+    const dt = 1 / cfg.fps;
+    const wallR = cfg.trayRadius - 0.6;
+    let bestPath = null, bestError = Infinity;
+
+    for (let a = 0; a < cfg.trials; a++) {
+      const p = [];
+      let x = startX, z = startZ;
+      const aim = Math.atan2(-startZ, -startX) + (Math.random() - 0.5) * 3.0;
+      const spd = cfg.speedMin + Math.random() * (cfg.speedMax - cfg.speedMin);
+      let vx = Math.cos(aim) * spd, vz = Math.sin(aim) * spd;
+      const fr = cfg.frictionMin + Math.random() * (cfg.frictionMax - cfg.frictionMin);
+      let bc = 0;
+
+      for (let i = 0; i <= steps; i++) {
+        p.push([Math.round(x * 100) / 100, Math.round(z * 100) / 100]);
+        x += vx * dt; z += vz * dt;
+        const d = Math.sqrt(x * x + z * z);
+        if (d > wallR && d > 0.001) {
+          const nx = x / d, nz = z / d;
+          x = nx * wallR; z = nz * wallR;
+          const dot = vx * nx + vz * nz;
+          if (dot > 0) { vx -= 2*dot*nx; vz -= 2*dot*nz; vx *= cfg.wallBounce; vz *= cfg.wallBounce; bc++; }
+        }
+        vx *= fr; vz *= fr;
+      }
+      if (bc < cfg.minBounces) continue;
+      const ex = p[p.length-1][0], ez = p[p.length-1][1];
+      const err = Math.sqrt((ex-targetX)**2 + (ez-targetZ)**2);
+      if (err < bestError) { bestError = err; bestPath = p; }
+    }
+
+    if (!bestPath) {
+      bestPath = [];
+      const steps2 = Math.ceil(cfg.duration * cfg.fps);
+      for (let i = 0; i <= steps2; i++) {
+        const t = i / steps2;
+        bestPath.push([
+          Math.round((startX + (targetX-startX)*t)*100)/100,
+          Math.round((startZ + (targetZ-startZ)*t)*100)/100
+        ]);
+      }
+    }
+
+    const errX = targetX - bestPath[bestPath.length-1][0];
+    const errZ = targetZ - bestPath[bestPath.length-1][1];
+    for (let j = 0; j < bestPath.length; j++) {
+      const w = Math.pow(j / (bestPath.length-1), 5);
+      bestPath[j][0] = Math.round((bestPath[j][0] + errX*w)*100)/100;
+      bestPath[j][1] = Math.round((bestPath[j][1] + errZ*w)*100)/100;
+    }
+
+    return { path: bestPath, error: bestError };
+  }
+
+  // ===== DRAWING =====
+  function worldToCanvas(x, z, trayR) {
+    const scale = (canvas.width * 0.45) / trayR;
+    return {
+      cx: canvas.width / 2 + x * scale,
+      cy: canvas.height / 2 + z * scale
+    };
+  }
+
+  function drawTray(trayR) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const c = worldToCanvas(0, 0, trayR);
+    const scale = (canvas.width * 0.45) / trayR;
+    ctx.strokeStyle = "#3e2723";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(c.cx, c.cy, trayR * scale, 0, Math.PI * 2);
+    ctx.stroke();
+    // Grid positions
+    return scale;
+  }
+
+  function drawPaths(pathSet, trayR, gridPos, progress) {
+    const scale = drawTray(trayR);
+    const colors = ["#e74c3c","#3498db","#2ecc71","#9b59b6","#e67e22","#f1c40f","#1abc9c","#e84393","#fd79a8","#6c5ce7"];
+
+    // Draw grid targets
+    for (let i = 0; i < gridPos.length; i++) {
+      const t = worldToCanvas(gridPos[i].x, gridPos[i].z, trayR);
+      ctx.fillStyle = "rgba(255,255,255,0.15)";
+      ctx.beginPath();
+      ctx.arc(t.cx, t.cy, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#555";
+      ctx.font = "10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("T" + i, t.cx, t.cy + 3);
+    }
+
+    // Draw paths
+    for (let d = 0; d < pathSet.length; d++) {
+      const path = pathSet[d];
+      const maxIdx = progress !== undefined ? Math.floor(progress * (path.length - 1)) : path.length - 1;
+
+      ctx.strokeStyle = colors[d % colors.length];
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      for (let i = 0; i <= maxIdx && i < path.length; i++) {
+        const p = worldToCanvas(path[i][0], path[i][1], trayR);
+        if (i === 0) ctx.moveTo(p.cx, p.cy);
+        else ctx.lineTo(p.cx, p.cy);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Current position dot
+      if (maxIdx < path.length) {
+        const cur = worldToCanvas(path[maxIdx][0], path[maxIdx][1], trayR);
+        ctx.fillStyle = colors[d % colors.length];
+        ctx.beginPath();
+        ctx.arc(cur.cx, cur.cy, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Start dot
+      const s = worldToCanvas(path[0][0], path[0][1], trayR);
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(s.cx, s.cy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function animatePreview(pathSet, trayR, gridPos, duration) {
+    if (animFrame) cancelAnimationFrame(animFrame);
+    animStart = performance.now();
+    function step() {
+      const elapsed = (performance.now() - animStart) / 1000;
+      const progress = Math.min(elapsed / duration, 1);
+      drawPaths(pathSet, trayR, gridPos, progress);
+      if (progress < 1) animFrame = requestAnimationFrame(step);
+      else infoEl.textContent = "Animation complete. Paths shown as trails.";
+    }
+    step();
+  }
+
+  // ===== BUTTONS =====
+  document.getElementById("btnPreview").onclick = function() {
+    const cfg = getConfig();
+    const count = parseInt(document.getElementById("previewCount").value);
+    const grid = getGridPositions(count);
+    statusEl.textContent = "Simulating " + count + " dice...";
+
+    setTimeout(function() {
+      const pathSet = [];
+      let totalErr = 0;
+      for (let d = 0; d < count; d++) {
+        const a = (d / count) * Math.PI * 2 + Math.random() * 0.5;
+        const r = cfg.trayRadius * 0.75;
+        const res = simulatePath(Math.cos(a)*r, Math.sin(a)*r, grid[d].x, grid[d].z, cfg);
+        pathSet.push(res.path);
+        totalErr += res.error;
+      }
+      previewPaths = pathSet;
+      statusEl.textContent = "Done. Avg error: " + (totalErr / count).toFixed(3);
+      animatePreview(pathSet, cfg.trayRadius, grid, cfg.duration);
+    }, 50);
+  };
+
+  document.getElementById("btnGenerate").onclick = function() {
+    const cfg = getConfig();
+    statusEl.textContent = "Generating all paths (1-10 dice)...";
+
+    setTimeout(function() {
+      const allPaths = {};
+      const allGrid = {};
+      let total = 0, totalErr = 0, maxErr = 0;
+
+      for (let count = 1; count <= 10; count++) {
+        allPaths[count] = [];
+        const grid = getGridPositions(count);
+        allGrid[count] = grid;
+
+        for (let set = 0; set < cfg.setsPerCount; set++) {
+          const pathSet = [];
+          for (let d = 0; d < count; d++) {
+            const a = (d / count) * Math.PI * 2 + set * 0.7 + Math.random() * 0.5;
+            const r = cfg.trayRadius * 0.75;
+            const res = simulatePath(Math.cos(a)*r, Math.sin(a)*r, grid[d].x, grid[d].z, cfg);
+            pathSet.push(res.path);
+            total++;
+            totalErr += res.error;
+            maxErr = Math.max(maxErr, res.error);
+          }
+          allPaths[count].push(pathSet);
+        }
+        statusEl.textContent = "Generated: " + count + "/10...";
+      }
+
+      generatedData = {
+        paths: allPaths,
+        grid: allGrid,
+        config: { fps: cfg.fps, duration: cfg.duration }
+      };
+
+      statusEl.textContent = "Done! " + total + " paths. Avg err: " + (totalErr/total).toFixed(3) + ", Max: " + maxErr.toFixed(3);
+    }, 50);
+  };
+
+  document.getElementById("btnExport").onclick = function() {
+    if (!generatedData) { statusEl.textContent = "Generate first!"; return; }
+    const js = "// Auto-generated by sim-tool.html\n" +
+      "var PREBAKED_PATHS = " + JSON.stringify(generatedData.paths) + ";\n\n" +
+      "var PREBAKED_GRID = " + JSON.stringify(generatedData.grid) + ";\n\n" +
+      "var PATH_CONFIG = " + JSON.stringify(generatedData.config) + ";\n";
+    const blob = new Blob([js], { type: "application/javascript" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "paths.js";
+    a.click();
+    statusEl.textContent = "Exported paths.js (" + (js.length / 1024).toFixed(1) + " KB)";
+  };
+
+  document.getElementById("btnImport").onclick = function() {
+    document.getElementById("fileInput").click();
+  };
+
+  document.getElementById("fileInput").onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        eval(ev.target.result);
+        generatedData = { paths: PREBAKED_PATHS, grid: PREBAKED_GRID, config: PATH_CONFIG };
+        statusEl.textContent = "Imported! " + Object.keys(PREBAKED_PATHS).length + " dice counts loaded.";
+      } catch(err) {
+        statusEl.textContent = "Import error: " + err.message;
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Initial draw
+  drawTray(5.5);
+})();
+</script>
+</body>
+</html>

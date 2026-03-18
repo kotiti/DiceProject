@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dice Test - All 6 Types</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0c0c14;
+      color: #ffffff;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      z-index: 10;
+      font-size: 14px;
+      color: #aaa;
+    }
+    .label-row {
+      position: absolute;
+      bottom: 30px;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-around;
+      z-index: 10;
+    }
+    .die-label {
+      color: #fff;
+      font-size: 18px;
+      font-weight: bold;
+      text-align: center;
+      width: 16.66%;
+    }
+    #debug {
+      position: absolute;
+      top: 40px;
+      left: 10px;
+      z-index: 10;
+      font-size: 12px;
+      color: #888;
+      white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="info">Dice Face Number Test - All 6 Die Types (slowly rotating)</div>
+  <div class="label-row">
+    <div class="die-label" style="color:#e74c3c;">D4</div>
+    <div class="die-label" style="color:#3498db;">D6</div>
+    <div class="die-label" style="color:#2ecc71;">D8</div>
+    <div class="die-label" style="color:#9b59b6;">D12</div>
+    <div class="die-label" style="color:#e67e22;">D15</div>
+    <div class="die-label" style="color:#f1c40f;">D20</div>
+  </div>
+  <div id="debug"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    (function () {
+      "use strict";
+
+      var scene, camera, renderer;
+      var diceMeshes = [];
+      var debugEl = document.getElementById("debug");
+
+      // ===================== COLORS =====================
+      var COLORS = {
+        4:  0xe74c3c,
+        6:  0x3498db,
+        8:  0x2ecc71,
+        12: 0x9b59b6,
+        15: 0xe67e22,
+        20: 0xf1c40f
+      };
+
+      // ===================== FACE TEXTURE (for number planes) =====================
+      function createFaceTexture(number, bgColor, textColor, size) {
+        size = size || 256;
+        var canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        var ctx = canvas.getContext("2d");
+
+        // Transparent background so only the number shows
+        ctx.clearRect(0, 0, size, size);
+
+        // Semi-transparent circle background for readability
+        ctx.fillStyle = bgColor;
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Number
+        ctx.fillStyle = textColor;
+        ctx.font = "bold " + (size * 0.5) + "px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(number), size / 2, size / 2);
+
+        // Underline 6 and 9
+        if (number === 6 || number === 9) {
+          ctx.strokeStyle = textColor;
+          ctx.lineWidth = 3;
+          var w = ctx.measureText(String(number)).width;
+          ctx.beginPath();
+          ctx.moveTo(size / 2 - w / 2, size / 2 + size * 0.22);
+          ctx.lineTo(size / 2 + w / 2, size / 2 + size * 0.22);
+          ctx.stroke();
+        }
+
+        return canvas;
+      }
+
+      // ===================== D6 FACE TEXTURE (solid bg for cube) =====================
+      function createD6FaceTexture(number, hexColor, textColor, size) {
+        size = size || 256;
+        var canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        var ctx = canvas.getContext("2d");
+        var r = (hexColor >> 16) & 255, g = (hexColor >> 8) & 255, b = hexColor & 255;
+        ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
+        ctx.fillRect(0, 0, size, size);
+
+        // Subtle gradient
+        var grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.7);
+        grad.addColorStop(0, "rgba(255,255,255,0.08)");
+        grad.addColorStop(1, "rgba(0,0,0,0.15)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, size, size);
+
+        // Number
+        ctx.fillStyle = textColor;
+        ctx.font = "bold " + (size * 0.45) + "px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.shadowBlur = 4;
+        ctx.fillText(String(number), size / 2, size / 2);
+
+        // Underline 6 and 9
+        if (number === 6 || number === 9) {
+          var w = ctx.measureText(String(number)).width;
+          ctx.strokeStyle = textColor;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(size / 2 - w / 2, size / 2 + size * 0.25);
+          ctx.lineTo(size / 2 + w / 2, size / 2 + size * 0.25);
+          ctx.stroke();
+        }
+        return canvas;
+      }
+
+      // ===================== COMPUTE TRIANGLE NORMALS =====================
+      function computeTriNormals(geo) {
+        var pos = geo.getAttribute("position");
+        var normals = [];
+        var centers = [];
+        for (var i = 0; i < pos.count; i += 3) {
+          var a = new THREE.Vector3().fromBufferAttribute(pos, i);
+          var b = new THREE.Vector3().fromBufferAttribute(pos, i + 1);
+          var c = new THREE.Vector3().fromBufferAttribute(pos, i + 2);
+          var n = new THREE.Vector3().crossVectors(
+            new THREE.Vector3().subVectors(b, a),
+            new THREE.Vector3().subVectors(c, a)
+          ).normalize();
+          normals.push(n);
+          centers.push(new THREE.Vector3(
+            (a.x + b.x + c.x) / 3,
+            (a.y + b.y + c.y) / 3,
+            (a.z + b.z + c.z) / 3
+          ));
+        }
+        return { normals: normals, centers: centers };
+      }
+
+      // ===================== GROUP COPLANAR TRIANGLES =====================
+      function groupCoplanar(normals, centers, tol) {
+        var groups = [];
+        for (var i = 0; i < normals.length; i++) {
+          var found = false;
+          for (var gi = 0; gi < groups.length; gi++) {
+            var g = groups[gi];
+            if (normals[i].distanceTo(g.normal) < tol && centers[i].distanceTo(g.center) < 2) {
+              var n = g.tris.length + 1;
+              g.center.multiplyScalar((n - 1) / n).addScaledVector(centers[i], 1 / n);
+              g.tris.push(i);
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            groups.push({ normal: normals[i].clone(), center: centers[i].clone(), tris: [i] });
+          }
+        }
+        return groups;
+      }
+
+      // ===================== COMPUTE FACE SIZE =====================
+      // Returns the approximate radius of a face (max distance from center to vertex)
+      function computeFaceRadius(geo, group) {
+        var pos = geo.getAttribute("position");
+        var maxDist = 0;
+        for (var ti = 0; ti < group.tris.length; ti++) {
+          var triIdx = group.tris[ti];
+          for (var v = 0; v < 3; v++) {
+            var vi = triIdx * 3 + v;
+            var vPos = new THREE.Vector3().fromBufferAttribute(pos, vi);
+            var dist = vPos.distanceTo(group.center);
+            if (dist > maxDist) maxDist = dist;
+          }
+        }
+        return maxDist;
+      }
+
+      // ===================== CREATE NON-D6 DIE (face-center planes) =====================
+      function createNonD6Die(sides, color) {
+        var geo;
+        switch (sides) {
+          case 4:  geo = new THREE.TetrahedronGeometry(1.02); break;
+          case 8:  geo = new THREE.OctahedronGeometry(0.935); break;
+          case 12: geo = new THREE.DodecahedronGeometry(0.935); break;
+          case 15: geo = new THREE.CylinderGeometry(0.765, 0.765, 0.85, 15); break;
+          case 20: geo = new THREE.IcosahedronGeometry(0.935); break;
+          default: geo = new THREE.OctahedronGeometry(0.935); break;
+        }
+
+        // Convert to non-indexed for triangle analysis
+        if (geo.index) geo = geo.toNonIndexed();
+        geo.computeVertexNormals();
+
+        // Base mesh with solid color, flat shading for polyhedra look
+        var baseMat = new THREE.MeshStandardMaterial({
+          color: color,
+          roughness: 0.4,
+          metalness: 0.1,
+          flatShading: true
+        });
+        var mesh = new THREE.Mesh(geo, baseMat);
+        mesh.castShadow = true;
+
+        // Compute triangle normals and group coplanar faces
+        var data = computeTriNormals(geo);
+        var tol = 0.05;
+        var groups = groupCoplanar(data.normals, data.centers, tol);
+
+        // If too many groups, increase tolerance
+        if (sides !== 15 && groups.length > sides) {
+          groups = groupCoplanar(data.normals, data.centers, 0.15);
+        }
+        if (sides !== 15 && groups.length > sides) {
+          groups = groupCoplanar(data.normals, data.centers, 0.3);
+        }
+
+        var faceGroups;
+        if (sides === 15) {
+          // D15: only the side faces get numbers, filter out top/bottom caps
+          var sideG = groups.filter(function (g) { return Math.abs(g.normal.y) < 0.3; });
+          sideG.sort(function (a, b) {
+            return Math.atan2(a.normal.z, a.normal.x) - Math.atan2(b.normal.z, b.normal.x);
+          });
+          faceGroups = sideG;
+        } else {
+          // Sort consistently
+          groups.sort(function (a, b) {
+            if (Math.abs(a.normal.y - b.normal.y) > 0.001) return b.normal.y - a.normal.y;
+            if (Math.abs(a.normal.x - b.normal.x) > 0.001) return a.normal.x - b.normal.x;
+            return a.normal.z - b.normal.z;
+          });
+          faceGroups = groups.slice(0, sides);
+        }
+
+        // Convert hex color to CSS rgba for the circle background
+        var r = (color >> 16) & 255;
+        var g2 = (color >> 8) & 255;
+        var b = color & 255;
+        var bgColorCSS = "rgba(" + Math.max(0, r - 40) + "," + Math.max(0, g2 - 40) + "," + Math.max(0, b - 40) + ",0.85)";
+
+        // Create a number plane for each face
+        var debugInfo = sides + " faces: found " + faceGroups.length + " groups";
+        for (var fi = 0; fi < faceGroups.length && fi < sides; fi++) {
+          var faceGroup = faceGroups[fi];
+          var faceCenter = faceGroup.center.clone();
+          var faceNormal = faceGroup.normal.clone().normalize();
+
+          // Compute the face radius for plane sizing
+          var faceRadius = computeFaceRadius(geo, faceGroup);
+          var planeSize = faceRadius * 0.6 * 2; // 60% of face size, diameter
+
+          // Minimum plane size so numbers are always readable
+          if (planeSize < 0.25) planeSize = 0.25;
+
+          // Create number texture
+          var number = fi + 1;
+          var texCanvas = createFaceTexture(number, bgColorCSS, "#ffffff", 256);
+          var texture = new THREE.CanvasTexture(texCanvas);
+          texture.minFilter = THREE.LinearFilter;
+
+          // Create the plane
+          var planeGeo = new THREE.PlaneGeometry(planeSize, planeSize);
+          var planeMat = new THREE.MeshBasicMaterial({
+            map: texture,
+            transparent: true,
+            depthWrite: false,
+            side: THREE.DoubleSide
+          });
+          var plane = new THREE.Mesh(planeGeo, planeMat);
+
+          // Position at face center + slight offset along normal
+          plane.position.copy(faceCenter).addScaledVector(faceNormal, 0.02);
+
+          // Orient: make the plane face outward
+          var up = new THREE.Vector3(0, 1, 0);
+          if (Math.abs(faceNormal.dot(up)) > 0.99) {
+            up = new THREE.Vector3(1, 0, 0);
+          }
+          var lookTarget = faceCenter.clone().add(faceNormal);
+          plane.lookAt(lookTarget);
+
+          // Add as child of the die mesh
+          mesh.add(plane);
+        }
+
+        debugEl.textContent += debugInfo + "\n";
+        return mesh;
+      }
+
+      // ===================== CREATE D6 (multi-material approach) =====================
+      function createD6(color) {
+        var geo = new THREE.BoxGeometry(1.105, 1.105, 1.105);
+        var order = [1, 6, 2, 5, 3, 4]; // +x -x +y -y +z -z
+        var mats = order.map(function (v) {
+          var tex = new THREE.CanvasTexture(createD6FaceTexture(v, color, "#ffffff"));
+          tex.minFilter = THREE.LinearFilter;
+          return new THREE.MeshStandardMaterial({
+            map: tex,
+            roughness: 0.4,
+            metalness: 0.1
+          });
+        });
+        var mesh = new THREE.Mesh(geo, mats);
+        mesh.castShadow = true;
+        return mesh;
+      }
+
+      // ===================== SCENE SETUP =====================
+      function initScene() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        // Camera
+        camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 4, 12);
+        camera.lookAt(0, 0, 0);
+
+        // Renderer
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+        var dir = new THREE.DirectionalLight(0xfff5e0, 0.8);
+        dir.position.set(5, 10, 5);
+        dir.castShadow = true;
+        scene.add(dir);
+
+        var fill = new THREE.PointLight(0xc9a84c, 0.4, 30);
+        fill.position.set(-5, 8, -3);
+        scene.add(fill);
+
+        var backLight = new THREE.PointLight(0x6688cc, 0.3, 20);
+        backLight.position.set(0, 5, -8);
+        scene.add(backLight);
+
+        // Create all 6 dice types side by side
+        var diceTypes = [
+          { sides: 4,  label: "D4" },
+          { sides: 6,  label: "D6" },
+          { sides: 8,  label: "D8" },
+          { sides: 12, label: "D12" },
+          { sides: 15, label: "D15" },
+          { sides: 20, label: "D20" }
+        ];
+
+        var spacing = 3.2;
+        var startX = -((diceTypes.length - 1) * spacing) / 2;
+
+        for (var i = 0; i < diceTypes.length; i++) {
+          var dt = diceTypes[i];
+          var color = COLORS[dt.sides];
+          var mesh;
+
+          if (dt.sides === 6) {
+            mesh = createD6(color);
+          } else {
+            mesh = createNonD6Die(dt.sides, color);
+          }
+
+          mesh.position.set(startX + i * spacing, 0, 0);
+          scene.add(mesh);
+          diceMeshes.push(mesh);
+        }
+      }
+
+      // ===================== ANIMATION LOOP =====================
+      function animate() {
+        requestAnimationFrame(animate);
+
+        // Slowly rotate each die
+        for (var i = 0; i < diceMeshes.length; i++) {
+          diceMeshes[i].rotation.y += 0.005;
+          diceMeshes[i].rotation.x += 0.003;
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      // ===================== RESIZE =====================
+      window.addEventListener("resize", function () {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // ===================== START =====================
+      initScene();
+      animate();
+    })();
+  </script>
+</body>
+</html>

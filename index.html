@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TRPG Dice Roller</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Noto+Sans+KR:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+  <!-- Main Control Panel -->
+  <div class="main-panel">
+    <div class="panel-header">
+      <h1>TRPG<br>Dice Roller</h1>
+      <p class="subtitle">주사위의 운명을 시험하라</p>
+    </div>
+
+    <div class="panel-body">
+      <div class="form-group">
+        <label for="dice-type">주사위 종류</label>
+        <select id="dice-type">
+          <option value="4">D4 (정사면체)</option>
+          <option value="6" selected>D6 (정육면체)</option>
+          <option value="8">D8 (정팔면체)</option>
+          <option value="12">D12 (정십이면체)</option>
+          <option value="15">D15</option>
+          <option value="20">D20 (정이십면체)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="dice-count">주사위 개수</label>
+        <div class="counter">
+          <button class="counter-btn" id="count-down">−</button>
+          <input type="number" id="dice-count" min="1" max="10" value="2">
+          <button class="counter-btn" id="count-up">+</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="dice-skin">스킨</label>
+        <select id="dice-skin">
+          <option value="classic">클래식</option>
+          <option value="neon">네온</option>
+          <option value="wooden">우드</option>
+          <option value="metal">메탈</option>
+          <option value="galaxy">갤럭시</option>
+        </select>
+        <div id="skin-preview" class="skin-preview"></div>
+      </div>
+
+      <button id="roll-btn" class="roll-button">
+        <span class="roll-icon">🎲</span>
+        <span>굴리기!</span>
+      </button>
+    </div>
+
+    <div class="panel-footer">
+      <h3>히스토리</h3>
+      <div id="history" class="history-list"></div>
+    </div>
+  </div>
+
+  <!-- Dice Roll Modal -->
+  <div id="dice-modal" class="modal">
+    <div class="modal-overlay" id="modal-overlay"></div>
+    <div class="modal-container">
+      <div class="modal-header">
+        <span id="modal-title" class="modal-title">2D6 굴리는 중...</span>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="canvas-container" class="canvas-container"></div>
+        <div id="result-overlay" class="result-overlay hidden">
+          <div class="result-badges" id="result-badges"></div>
+          <div class="result-total-row">
+            <span class="result-total-label">합계</span>
+            <span class="result-total-value" id="result-total">0</span>
+          </div>
+          <button class="result-close-btn" id="result-close-btn">확인</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="js/paths.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -59,14 +59,14 @@
 
   // Map skin ID to baseColor texture file
   var D6_SKIN_TEXTURES = {
-    dice_00: "assets/textures/dice_00_baseColor.png",
-    dice_01: "assets/textures/dice_01_baseColor.png",
-    dice_02: "assets/textures/dice_02_baseColor.png",
-    dice_03: "assets/textures/dice_03_baseColor.png"
+    dice_00: "assets/textures/dice_00_baseColor.jpg",
+    dice_01: "assets/textures/dice_01_baseColor.jpg",
+    dice_02: "assets/textures/dice_02_baseColor.jpg",
+    dice_03: "assets/textures/dice_03_baseColor.jpg"
   };
   var D6_SHARED_TEXTURES = {
-    normal: "assets/textures/dice_01_normal.png",
-    metallicRoughness: "assets/textures/dice_01_metallicRoughness.png"
+    normal: "assets/textures/dice_01_normal.jpg",
+    metallicRoughness: "assets/textures/dice_01_metallicRoughness.jpg"
   };
 
   // ===================== STATE =====================
@@ -109,10 +109,18 @@
     camera.position.set(0, 18, 0.8);
     camera.lookAt(0, 0, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // Mobile detection: reduce quality for low-end devices
+    var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    var maxPixelRatio = isMobile ? 1.5 : 2;
+
+    renderer = new THREE.WebGLRenderer({
+      antialias: !isMobile, // disable AA on mobile
+      alpha: true,
+      powerPreference: "high-performance"
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = isMobile ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
     canvasContainer.appendChild(renderer.domElement);
     resizeRenderer();
 
@@ -121,7 +129,7 @@
     const dir = new THREE.DirectionalLight(0xfff5e0, 0.7);
     dir.position.set(3, 14, 3);
     dir.castShadow = true;
-    dir.shadow.mapSize.set(2048, 2048);
+    dir.shadow.mapSize.set(isMobile ? 512 : 2048, isMobile ? 512 : 2048);
     dir.shadow.camera.near = 0.5;
     dir.shadow.camera.far = 30;
     dir.shadow.camera.left = -8;
@@ -951,6 +959,23 @@
     }
   }
 
+  // ===================== SKIP ANIMATION =====================
+  function skipToResult() {
+    if (!isAnimating) return;
+    isAnimating = false;
+
+    // Snap all dice to final position
+    for (var d = 0; d < activeDice.length; d++) {
+      var die = activeDice[d];
+      die.mesh.position.set(die.gridTarget.x, die.restY, die.gridTarget.z);
+      die.mesh.quaternion.copy(die.targetQuat);
+      die.settled = true;
+    }
+
+    // Jump straight to alignment
+    alignDiceToCamera();
+  }
+
   // ===================== RENDER LOOP =====================
   function animate(timestamp) {
     requestAnimationFrame(animate);
@@ -1002,6 +1027,9 @@
     modalClose.addEventListener("click", hideModal);
     modalOverlay.addEventListener("click", hideModal);
     resultCloseBtn.addEventListener("click", hideModal);
+
+    // Skip animation: click canvas during roll
+    canvasContainer.addEventListener("click", skipToResult);
 
     // Skin change
     skinSelect.addEventListener("change", updateSkinPreview);

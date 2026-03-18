@@ -38,8 +38,7 @@
   // ===================== CONSTANTS =====================
   const DICE_FACES = { D4: 4, D6: 6, D8: 8, D12: 12, D15: 15, D20: 20 };
   const DICE_RADIUS = 0.85;
-  const TRAY_RADIUS = 5.5;
-  const TRAY_WALL_HEIGHT = 1.2;
+  const TRAY_HALF = 5.0;  // half-size of square boundary
   const TABLE_Y = 0;
   const WALL_BOUNCE = 0.65;
   const FRICTION = 0.992;
@@ -83,14 +82,14 @@
   // ===================== SCENE SETUP =====================
   function initScene() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0c0c14);
+    scene.background = null; // transparent — modal is the backdrop
 
     // Top-down camera (BG3-style, nearly straight down with tiny tilt)
     camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
     camera.position.set(0, 18, 0.8);
     camera.lookAt(0, 0, 0);
 
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -128,42 +127,19 @@
     renderer.setSize(w, h);
   }
 
-  // ===================== TRAY =====================
+  // ===================== INVISIBLE FLOOR (shadow catcher) =====================
   function buildTray() {
     if (trayGroup) scene.remove(trayGroup);
     trayGroup = new THREE.Group();
-    const skin = SKINS[currentSkin];
 
-    // Floor
-    const floorGeo = new THREE.CircleGeometry(TRAY_RADIUS, 64);
-    const floorMat = new THREE.MeshStandardMaterial({
-      color: skin.trayFloor, roughness: 0.95, metalness: 0
-    });
-    const floor = new THREE.Mesh(floorGeo, floorMat);
+    // Invisible floor that only receives shadows
+    var floorGeo = new THREE.PlaneGeometry(TRAY_HALF * 2.5, TRAY_HALF * 2.5);
+    var floorMat = new THREE.ShadowMaterial({ opacity: 0.35 });
+    var floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.y = TABLE_Y;
+    floor.position.y = TABLE_Y - 0.01;
     floor.receiveShadow = true;
     trayGroup.add(floor);
-
-    // Rim (torus)
-    const rimGeo = new THREE.TorusGeometry(TRAY_RADIUS + 0.25, 0.35, 16, 64);
-    const rimMat = new THREE.MeshStandardMaterial({
-      color: skin.trayRim, roughness: 0.6, metalness: 0.2
-    });
-    const rim = new THREE.Mesh(rimGeo, rimMat);
-    rim.rotation.x = -Math.PI / 2;
-    rim.position.y = TABLE_Y + 0.2;
-    rim.castShadow = true;
-    trayGroup.add(rim);
-
-    // Inner wall (invisible cylinder for visual depth)
-    const wallGeo = new THREE.CylinderGeometry(TRAY_RADIUS, TRAY_RADIUS, TRAY_WALL_HEIGHT, 64, 1, true);
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: skin.trayRim, roughness: 0.7, metalness: 0.1, side: THREE.BackSide
-    });
-    const wall = new THREE.Mesh(wallGeo, wallMat);
-    wall.position.y = TABLE_Y + TRAY_WALL_HEIGHT / 2;
-    trayGroup.add(wall);
 
     scene.add(trayGroup);
   }
@@ -566,7 +542,8 @@
       tumbleAxis: tumbleAxis, tumbleTotalAngle: tumbleTotalAngle,
       wobbleAxis: wobbleAxis, wobbleTotalAngle: wobbleTotalAngle,
       deltaAxis: deltaAxis, deltaAngle: deltaAngle,
-      gridTarget: gridTarget, path: path, restY: restY, settled: false
+      gridTarget: gridTarget, path: path, restY: restY, settled: false,
+      dieType: dieType, resultValue: targetVal
     };
   }
 
@@ -706,70 +683,22 @@
   // ===================== ALIGN DICE FOR READABILITY =====================
   var isAligning = false;
   var alignStartTime = 0;
-  var ALIGN_DURATION = 0.5; // seconds
-
-  function findTextUpDirection(die) {
-    // Non-D6: find the topmost child plane, return its world +Y (text up)
-    if (die.mesh.children.length > 0) {
-      var topPlane = null, topY = -Infinity;
-      for (var c = 0; c < die.mesh.children.length; c++) {
-        var child = die.mesh.children[c];
-        var wp = new THREE.Vector3();
-        child.getWorldPosition(wp);
-        if (wp.y > topY) { topY = wp.y; topPlane = child; }
-      }
-      if (topPlane) {
-        var worldQ = new THREE.Quaternion();
-        topPlane.getWorldQuaternion(worldQ);
-        var textUp = new THREE.Vector3(0, 1, 0).applyQuaternion(worldQ);
-        textUp.y = 0;
-        if (textUp.length() > 0.001) textUp.normalize();
-        return textUp;
-      }
-    }
-    // D6 fallback: use local -Z transformed to world (Three.js BoxGeometry UV convention)
-    var textUp = new THREE.Vector3(0, 0, -1).applyQuaternion(die.mesh.quaternion);
-    textUp.y = 0;
-    if (textUp.length() > 0.001) textUp.normalize();
-    return textUp;
-  }
+  var ALIGN_DURATION = 0.4;
 
   function alignDiceToCamera() {
-    // Screen "up" from top-down camera ≈ -Z in world space
-    var screenUp = new THREE.Vector3(0, 0, -1);
-
     for (var d = 0; d < activeDice.length; d++) {
       var die = activeDice[d];
       die._alignFrom = die.mesh.quaternion.clone();
 
-      // Try 4 Y-rotations (0°, 90°, 180°, 270°), pick the one where
-      // the top face number reads upright from camera view.
-      var bestQ = null, bestScore = -Infinity;
-      var baseQ = die.targetQuat.clone();
+      // Compute the CLEAN face-up quaternion directly from the face map.
+      // This is mathematically perfect — no accumulated error.
+      var cleanQ = getFaceQuat(die.dieType, die.resultValue);
+      if (!cleanQ) cleanQ = new THREE.Quaternion();
 
-      for (var i = 0; i < 4; i++) {
-        var yRot = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0), i * Math.PI / 2
-        );
-        var testQ = yRot.clone().multiply(baseQ);
-
-        // Apply temporarily to measure text direction
-        die.mesh.quaternion.copy(testQ);
-        die.mesh.updateMatrixWorld(true);
-
-        var textUp = findTextUpDirection(die);
-        var score = textUp.dot(screenUp);
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestQ = testQ.clone();
-        }
-      }
-
-      // Restore current rotation, store target
-      die.mesh.quaternion.copy(die._alignFrom);
-      die._alignTarget = bestQ;
-      die._alignBounce = 1.0; // for scale bounce effect
+      // cleanQ has face pointing up with default orientation.
+      // The die is viewed from above (camera at +Z looking -Z).
+      // We just need the face flat — text direction is a bonus.
+      die._alignTarget = cleanQ.clone();
     }
 
     isAligning = true;
@@ -779,23 +708,20 @@
   function updateAlignment(dt) {
     var elapsed = performance.now() / 1000 - alignStartTime;
     var t = Math.min(elapsed / ALIGN_DURATION, 1.0);
-    // Ease-out cubic for smooth rotation
     var ease = 1 - Math.pow(1 - t, 3);
 
     for (var d = 0; d < activeDice.length; d++) {
       var die = activeDice[d];
       if (!die._alignTarget) continue;
 
-      // Slerp rotation
       die.mesh.quaternion.copy(die._alignFrom).slerp(die._alignTarget, ease);
 
-      // Subtle scale bounce: 1.0 → 1.08 → 1.0
+      // Subtle scale bounce effect
       var bounce = 1.0 + 0.08 * Math.sin(ease * Math.PI);
       die.mesh.scale.set(bounce, bounce, bounce);
     }
 
     if (t >= 1.0) {
-      // Finalize
       for (var d2 = 0; d2 < activeDice.length; d2++) {
         var die2 = activeDice[d2];
         if (die2._alignTarget) {
@@ -871,7 +797,8 @@
       const elapsed = performance.now() / 1000 - animStartTime;
       updatePhysics(dt, elapsed);
 
-      if (elapsed >= ANIM_DONE && activeDice.every(function(d){ return d.settled; })) {
+      var animDuration = (typeof PATH_CONFIG !== "undefined") ? PATH_CONFIG.duration : ANIM_DONE;
+      if (elapsed >= animDuration && activeDice.every(function(d){ return d.settled; })) {
         isAnimating = false;
         // Smoothly align dice so numbers face camera
         alignDiceToCamera();

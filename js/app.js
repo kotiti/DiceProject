@@ -685,20 +685,69 @@
   var alignStartTime = 0;
   var ALIGN_DURATION = 0.4;
 
+  // D6 per-face Y-rotation correction so text reads upright from camera.
+  // Computed from Three.js BoxGeometry UV mapping + setFromUnitVectors result.
+  // Camera looks from +Z toward origin → screen "up" = world -Z.
+  var D6_Y_FIX = { 1: -Math.PI/2, 2: 0, 3: 0, 4: Math.PI, 5: Math.PI, 6: Math.PI/2 };
+
+  function getAlignedFaceQuat(die) {
+    var faceQ = getFaceQuat(die.dieType, die.resultValue);
+    if (!faceQ) return new THREE.Quaternion();
+    faceQ = faceQ.clone();
+
+    if (die.dieType === "D6") {
+      // Apply hardcoded Y correction for each face's UV orientation
+      var angle = D6_Y_FIX[die.resultValue] || 0;
+      var yCorr = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+      return yCorr.multiply(faceQ);
+    }
+
+    // Non-D6: try 4 Y rotations, pick the one where the top number plane
+    // text reads upright from camera view.
+    if (die.mesh.children.length > 0) {
+      var screenUp = new THREE.Vector3(0, 0, -1);
+      var savedQ = die.mesh.quaternion.clone();
+      var bestQ = faceQ, bestScore = -Infinity;
+
+      for (var i = 0; i < 4; i++) {
+        var yRot = new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0), i * Math.PI / 2
+        );
+        var testQ = yRot.clone().multiply(faceQ);
+        die.mesh.quaternion.copy(testQ);
+        die.mesh.updateMatrixWorld(true);
+
+        // Find topmost child plane (the visible number)
+        var topPlane = null, topY = -Infinity;
+        for (var c = 0; c < die.mesh.children.length; c++) {
+          var wp = new THREE.Vector3();
+          die.mesh.children[c].getWorldPosition(wp);
+          if (wp.y > topY) { topY = wp.y; topPlane = die.mesh.children[c]; }
+        }
+        if (topPlane) {
+          var wq = new THREE.Quaternion();
+          topPlane.getWorldQuaternion(wq);
+          var textUp = new THREE.Vector3(0, 1, 0).applyQuaternion(wq);
+          textUp.y = 0;
+          if (textUp.length() > 0.001) {
+            textUp.normalize();
+            var score = textUp.dot(screenUp);
+            if (score > bestScore) { bestScore = score; bestQ = testQ.clone(); }
+          }
+        }
+      }
+      die.mesh.quaternion.copy(savedQ); // restore
+      return bestQ;
+    }
+
+    return faceQ;
+  }
+
   function alignDiceToCamera() {
     for (var d = 0; d < activeDice.length; d++) {
       var die = activeDice[d];
       die._alignFrom = die.mesh.quaternion.clone();
-
-      // Compute the CLEAN face-up quaternion directly from the face map.
-      // This is mathematically perfect — no accumulated error.
-      var cleanQ = getFaceQuat(die.dieType, die.resultValue);
-      if (!cleanQ) cleanQ = new THREE.Quaternion();
-
-      // cleanQ has face pointing up with default orientation.
-      // The die is viewed from above (camera at +Z looking -Z).
-      // We just need the face flat — text direction is a bonus.
-      die._alignTarget = cleanQ.clone();
+      die._alignTarget = getAlignedFaceQuat(die);
     }
 
     isAligning = true;

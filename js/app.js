@@ -57,16 +57,41 @@
   var gltfD6Textures = {};    // skinId → { baseColor, normal, metallicRoughness }
   var gltfD6Loading = null;   // promise
 
-  // Map skin ID to baseColor texture file
+  // Quality setting: "high" (512px) or "normal" (256px)
+  var textureQuality = "high";
+
+  // Texture paths per quality level
+  var D6_TEX_PATHS = {
+    high: {
+      skins: {
+        dice_00: "assets/textures/dice_00_baseColor.jpg",
+        dice_01: "assets/textures/dice_01_baseColor.jpg",
+        dice_02: "assets/textures/dice_02_baseColor.jpg",
+        dice_03: "assets/textures/dice_03_baseColor.jpg"
+      },
+      normal: "assets/textures/dice_01_normal.jpg",
+      metallicRoughness: "assets/textures/dice_01_metallicRoughness.jpg"
+    },
+    normal: {
+      skins: {
+        dice_00: "assets/textures/dice_00_baseColor_low.jpg",
+        dice_01: "assets/textures/dice_01_baseColor_low.jpg",
+        dice_02: "assets/textures/dice_02_baseColor_low.jpg",
+        dice_03: "assets/textures/dice_03_baseColor_low.jpg"
+      },
+      normal: "assets/textures/dice_01_normal_low.jpg",
+      metallicRoughness: "assets/textures/dice_01_metallicRoughness_low.jpg"
+    }
+  };
+
+  function getTexPaths() { return D6_TEX_PATHS[textureQuality] || D6_TEX_PATHS.high; }
+
+  // Keep these for skin preview (always use high-res thumbnails)
   var D6_SKIN_TEXTURES = {
     dice_00: "assets/textures/dice_00_baseColor.jpg",
     dice_01: "assets/textures/dice_01_baseColor.jpg",
     dice_02: "assets/textures/dice_02_baseColor.jpg",
     dice_03: "assets/textures/dice_03_baseColor.jpg"
-  };
-  var D6_SHARED_TEXTURES = {
-    normal: "assets/textures/dice_01_normal.jpg",
-    metallicRoughness: "assets/textures/dice_01_metallicRoughness.jpg"
   };
 
   // ===================== STATE =====================
@@ -386,18 +411,19 @@
           }
         });
 
-        // Load shared textures
+        // Load textures based on quality setting
+        var texPaths = getTexPaths();
         var texLoader = new THREE.TextureLoader();
-        var normalTex = texLoader.load(D6_SHARED_TEXTURES.normal);
-        var mrTex = texLoader.load(D6_SHARED_TEXTURES.metallicRoughness);
+        var normalTex = texLoader.load(texPaths.normal);
+        var mrTex = texLoader.load(texPaths.metallicRoughness);
         normalTex.flipY = false;
         mrTex.flipY = false;
 
         // Load per-skin baseColor textures
-        var skinIds = Object.keys(D6_SKIN_TEXTURES);
+        var skinIds = Object.keys(texPaths.skins);
         for (var i = 0; i < skinIds.length; i++) {
           var sid = skinIds[i];
-          var bcTex = texLoader.load(D6_SKIN_TEXTURES[sid]);
+          var bcTex = texLoader.load(texPaths.skins[sid]);
           bcTex.flipY = false;
           gltfD6Textures[sid] = {
             baseColor: bcTex,
@@ -1034,6 +1060,24 @@
     // Skin change
     skinSelect.addEventListener("change", updateSkinPreview);
     updateSkinPreview();
+
+    // Quality change: reload textures
+    var qualitySelect = document.getElementById("quality");
+    if (qualitySelect) {
+      // Auto-detect: default to "normal" on mobile
+      var isMob = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMob) {
+        qualitySelect.value = "normal";
+        textureQuality = "normal";
+      }
+      qualitySelect.addEventListener("change", function() {
+        textureQuality = this.value;
+        // Force reload textures on next roll
+        gltfD6Loaded = false;
+        gltfD6Loading = null;
+        gltfD6Textures = {};
+      });
+    }
 
     // Keyboard
     document.addEventListener("keydown", function(e) {
